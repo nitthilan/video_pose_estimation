@@ -50,9 +50,9 @@ class FittingMonitor(object):
         self.summary_steps = summary_steps
         self.body_color = body_color
         self.model_type = model_type
+        self.steps = 0
 
     def __enter__(self):
-        self.steps = 0
         if self.visualize:
             self.mv = MeshViewer(body_color=self.body_color)
         return self
@@ -214,7 +214,7 @@ class SMPLifyLoss(nn.Module):
                  use_joints_conf=True,
                  use_face=True, use_hands=True,
                  left_hand_prior=None, right_hand_prior=None,
-                 interpenetration=True, dtype=torch.float32,
+                 dtype=torch.float32,
                  data_weight=1.0,
                  body_pose_weight=0.0,
                  shape_weight=0.0,

@@ -52,6 +52,9 @@ import utils
 
 
 import common_functions as cf
+# from torch import vmap
+
+
 
 def refine_beta(dataset_obj, result_folder, model_params,
         camera, joint_weights, dtype,
@@ -67,10 +70,15 @@ def refine_beta(dataset_obj, result_folder, model_params,
     use_cuda = True
     person_id = 0
     rho=100
-    maxiters = 10#30
+    maxiters = 10
     loss_type = 'smplify'
     use_joints_conf = True
+    batch_size = 10
+    model_params['batch_size'] = batch_size
+    args['batch_size'] = batch_size
+
     body_model = cf.get_model(use_cuda, model_params, input_gender)
+    # batched_body_model = torch.vmap(body_model)
     device = torch.device('cuda') if use_cuda else torch.device('cpu')
 
     # assert batch_size == 1, 'PyTorch L-BFGS only supports batch_size == 1'
@@ -78,9 +86,9 @@ def refine_beta(dataset_obj, result_folder, model_params,
     #     continue
     sample_data=next(iter(dataset_obj))
 
-    betas = torch.unsqueeze(sample_data['mean_beta'], 0).float().to(device=device)
+    betas = sample_data['mean_beta'].float().to(device=device)
     est_params = {}
-    est_params['betas'] = betas
+    est_params['betas'] = betas.repeat(batch_size, 1)
     body_model.reset_params(**est_params)
 
     final_params = []
@@ -103,9 +111,11 @@ def refine_beta(dataset_obj, result_folder, model_params,
 
     body_pose_prior_weights, shape_weights, \
         hand_joints_weights, face_joints_weights = \
-        get_loss_weights(body_pose_prior_weights,
+        cf.get_beta_refinement_weights(body_pose_prior_weights,
             shape_weights, hand_joints_weights, face_joints_weights,
             use_hands, use_face)
+
+    camera = cf.get_camera(args.get('focal_length'), use_cuda, dtype, args)
 
     img = torch.tensor(sample_data['img'], dtype=dtype)
     H, W, _ = img.shape
@@ -119,10 +129,10 @@ def refine_beta(dataset_obj, result_folder, model_params,
     curr_weights, joint_weights = init_weights(joint_weights, data_weight,
         body_pose_prior_weights[0], shape_weights[0], 
         face_joints_weights[0], hand_joints_weights[0],
-        use_hands, use_face)
+        use_hands, use_face, batch_size)
     loss.reset_loss_weights(curr_weights)
 
-    train_dataloader = DataLoader(dataset_obj, batch_size=1, shuffle=False)
+    train_dataloader = DataLoader(dataset_obj, batch_size=batch_size, shuffle=False)
 
     torch.autograd.set_detect_anomaly(True)
     person_id = 0
@@ -145,15 +155,18 @@ def refine_beta(dataset_obj, result_folder, model_params,
             # Update the value of the translation of the camera as well as
             # the image center.
             with torch.no_grad():
+                # print("Shape of translation ", camera.translation.shape,
+                #     data['cam_trans'].shape)
                 camera.translation[:] = data['cam_trans'].view_as(camera.translation) #torch.tensor(data['cam_trans'], dtype=dtype) #init_t.view_as(camera.translation)
-            keypoints = data['keypoints'][0]
+            keypoints = data['keypoints']
             # print('Processing: {}'.format(data['img_path']))
-            keypoints = keypoints[[person_id]]
+            # print("Key point shape ", keypoints.shape)
+            keypoints = keypoints[:,person_id,:,:]
             keypoint_data = torch.tensor(keypoints, dtype=dtype)
             gt_joints = keypoint_data[:, :, :2]
             gt_joints = gt_joints.to(device=device, dtype=dtype)
             if use_joints_conf:
-                joints_conf = keypoint_data[:, :, 2].reshape(1, -1)
+                joints_conf = keypoint_data[:, :, 2].reshape(batch_size, -1)
                 joints_conf = joints_conf.to(device=device, dtype=dtype)
 
             def closure():
@@ -202,56 +215,31 @@ def refine_beta(dataset_obj, result_folder, model_params,
 
             total_loss += prev_loss
 
-        print("Loss ", n, idx, total_loss/(idx+1))
-        if(min_loss >= total_loss/(idx+1)):
+        total_loss = total_loss/((idx+1)*batch_size)
+        if(min_loss >= total_loss):
             min_loss_beta = body_model.betas
-            min_loss = total_loss/(idx+1)
+            min_loss = total_loss
+        print("Loss ", n, idx, total_loss)
+        # Update the betas
+        est_params = {}
+        est_params['betas'] = torch.mean(body_model.betas, dim=0).repeat(batch_size, 1)
+        body_model.reset_params(**est_params)
+
         total_loss = 0.0
         # print("Betas ", idx, body_model.betas)
 
-    dataset_obj.update_beta(min_loss_beta)
+    dataset_obj.update_beta(torch.mean(min_loss_beta.detach().cpu(), dim=0))
+
+    model_params['batch_size'] = 1
+    args['batch_size'] = 1
 
     return
-
-def get_loss_weights(body_pose_prior_weights,
-    shape_weights, hand_joints_weights, face_joints_weights,
-    use_hands, use_face):
-
-    if body_pose_prior_weights is None:
-        body_pose_prior_weights = [4.04 * 1e2, 4.04 * 1e2, 57.4, 4.78]
-
-    if shape_weights is None:
-        shape_weights = [1e2, 5 * 1e1, 1e1, .5 * 1e1]
-    msg = ('Number of Body pose prior weights = {} does not match the' +
-           ' number of Shape prior weights = {}')
-    assert (len(shape_weights) ==
-            len(body_pose_prior_weights)), msg.format(
-                len(shape_weights),
-                len(body_pose_prior_weights))
-
-    if use_hands:
-        if hand_joints_weights is None:
-            hand_joints_weights = [0.0, 0.0, 0.0, 1.0]
-            msg = ('Number of Body pose prior weights does not match the' +
-                   ' number of hand joint distance weights')
-            assert (len(hand_joints_weights) ==
-                    len(body_pose_prior_weights)), msg
-    if use_face:
-        if face_joints_weights is None:
-            face_joints_weights = [0.0, 0.0, 0.0, 1.0]
-        msg = ('Number of Body pose prior weights does not match the' +
-               ' number of face joint distance weights')
-        assert (len(face_joints_weights) ==
-                len(body_pose_prior_weights)), msg
-
-    return body_pose_prior_weights, shape_weights, hand_joints_weights, \
-        face_joints_weights
 
 
 
 def init_weights(joint_weights, data_weight, body_pose_weight, 
     shape_weight, face_joints_weights, hand_joints_weights,
-    use_hands, use_face):
+    use_hands, use_face, batch_size):
     curr_weights = {}
     curr_weights['body_pose_weight'] = body_pose_weight
     curr_weights['shape_weight'] = shape_weight
@@ -261,4 +249,6 @@ def init_weights(joint_weights, data_weight, body_pose_weight,
         joint_weights[:, 25:67] = face_joints_weights
     if use_face:
         joint_weights[:, 67:] = hand_joints_weights
+
+    joint_weights = joint_weights.repeat(batch_size,1)
     return curr_weights, joint_weights

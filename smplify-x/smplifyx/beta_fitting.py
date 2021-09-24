@@ -261,6 +261,10 @@ class SMPLifyLoss(nn.Module):
     def forward(self, body_model_output, camera, gt_joints, 
         joints_conf, joint_weights, **kwargs):
         projected_joints = camera(body_model_output.joints)
+        # print("Shapes of output ", projected_joints.shape,
+        #     body_model_output.joints.shape,
+        #     joint_weights.shape, joints_conf.shape,
+        #     gt_joints.shape, body_model_output.body_pose.shape)
         # Calculate the weights for each joints
         weights = (joint_weights * joints_conf
                    if self.use_joints_conf else
