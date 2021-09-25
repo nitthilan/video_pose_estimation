@@ -168,6 +168,10 @@ def get_smplx_list(data_root):
     cam_trans = np.zeros((num_frames, 3))
     lft_hnd_list = np.zeros((num_frames, 45))
     rgt_hnd_list = np.zeros((num_frames, 45))
+    jaw_pose_list = np.zeros((num_frames, 3))
+    leye_pose_list = np.zeros((num_frames, 3))
+    reye_pose_list = np.zeros((num_frames, 3))
+    expression_list = np.zeros((num_frames, 10))
     i = 0
     for x in range(num_frames):
         if(".DS_Store" in [x]):
@@ -198,7 +202,8 @@ def get_smplx_list(data_root):
     # print(np.mean(beta_list, axis=0), np.std(beta_list, axis=0))
     # print(np.mean(cam_trans, axis=0), np.std(cam_trans, axis=0))
     # print(np.mean(body_pose_list, axis=0), np.std(body_pose_list, axis=0))
-    return beta_list, cam_trans, body_pose_list, lft_hnd_list, rgt_hnd_list
+    return beta_list, cam_trans, body_pose_list, lft_hnd_list, rgt_hnd_list,\
+        jaw_pose_list, expression_list, leye_pose_list, reye_pose_list
 
 # List of data required:
 # Run frankmocap - to get init camera parameters and betas and pose params
@@ -247,13 +252,18 @@ class OpenPose(Dataset):
         # self.img_paths = sorted(self.img_paths)
         # print("Image paths ", self.img_paths[:20])
         self.cnt = 0
-        beta_list, cam_trans, body_pose_list, lft_hnd_list, rgt_hnd_list = \
+        beta_list, cam_trans, body_pose_list, lft_hnd_list, rgt_hnd_list,\
+            jaw_pose_list, expression_list, leye_pose_list, reye_pose_list = \
             get_smplx_list(data_folder)
         self.beta_list = torch.tensor(beta_list, dtype=self.dtype)
         self.cam_trans = torch.tensor(cam_trans, dtype=self.dtype)
         self.body_pose_list = torch.tensor(body_pose_list, dtype=self.dtype)
         self.lft_hnd_list = torch.tensor(lft_hnd_list, dtype=self.dtype)
         self.rgt_hnd_list = torch.tensor(rgt_hnd_list, dtype=self.dtype)
+        self.jaw_pose_list = torch.tensor(jaw_pose_list, dtype=self.dtype)
+        self.expression_list = torch.tensor(expression_list, dtype=self.dtype)
+        self.leye_pose_list = torch.tensor(leye_pose_list, dtype=self.dtype)
+        self.reye_pose_list = torch.tensor(reye_pose_list, dtype=self.dtype)
         # self.mean_beta = torch.tensor(np.mean(beta_list, axis=0), dtype=self.dtype)
         self.mean_beta = self.update_mean()
 
@@ -297,16 +307,32 @@ class OpenPose(Dataset):
         output_dict["left_hand_pose"] = self.lft_hnd_list[idx]
         output_dict["right_hand_pose"] = self.rgt_hnd_list[idx]
         output_dict["mean_beta"] = self.mean_beta
+        output_dict["jaw_pose"] = self.jaw_pose_list[idx]
+        output_dict["expression"] = self.expression_list[idx]
+        output_dict["leye_pose"] = self.leye_pose_list[idx]
+        output_dict["reye_pose"] = self.reye_pose_list[idx]
         # print("Output data ", output_dict)
         return output_dict
 
-    def update_new_idx(self, idx, cam_trans, body_pose, left_hand_pose,
-        right_hand_pose):
-        idx = self.idx_scale*idx
-        self.cam_trans[idx] = torch.tensor(cam_trans, dtype=self.dtype)
-        self.body_pose_list[idx, :66] = torch.tensor(body_pose, dtype=self.dtype)
-        self.lft_hnd_list[idx] = torch.tensor(left_hand_pose, dtype=self.dtype)
-        self.rgt_hnd_list[idx] = torch.tensor(right_hand_pose, dtype=self.dtype)
+
+    def update_new_idx(self, result_stored):
+        idx = result_stored["idx"]
+        batch_size = result_stored["camera_translation"].shape[0]
+        scale_idx = self.idx_scale*idx*batch_size
+
+        for i in range(batch_size):
+            idx1 = scale_idx + i*self.idx_scale
+            # print("Update ", idx1, i)
+            self.cam_trans[idx1] = torch.tensor(result_stored["camera_translation"][i], dtype=self.dtype)
+            self.body_pose_list[idx1, 3:66] = torch.tensor(result_stored["body_pose"][i], dtype=self.dtype)
+            self.body_pose_list[idx1, :3] = torch.tensor(result_stored["global_orient"][i], dtype=self.dtype)
+
+            self.lft_hnd_list[idx1] = torch.tensor(result_stored["left_hand_pose"][i], dtype=self.dtype)
+            self.rgt_hnd_list[idx1] = torch.tensor(result_stored["right_hand_pose"][i], dtype=self.dtype)
+            self.jaw_pose_list[idx1] = torch.tensor(result_stored["jaw_pose"][i], dtype=self.dtype)
+            self.expression_list[idx1] = torch.tensor(result_stored["expression"][i], dtype=self.dtype)
+            self.leye_pose_list[idx1] = torch.tensor(result_stored["leye_pose"][i], dtype=self.dtype)
+            self.reye_pose_list[idx1] = torch.tensor(result_stored["reye_pose"][i], dtype=self.dtype)
         return
 
     def update_beta(self, beta):
@@ -314,13 +340,13 @@ class OpenPose(Dataset):
         return
 
     def update_mean(self):
-        mean_beta = torch.zeros((1, 10))
+        mean_beta = torch.zeros(10)
         for i in range(self.total_files):
             idx = i*self.idx_scale
             mean_beta += self.beta_list[idx]
 
         self.mean_beta = mean_beta/self.total_files
-        # print("The mean beta ", self.mean_beta)
+        # print("The mean beta ", self.mean_beta.shape)
         return self.mean_beta
 
     def read_item(self, img_path):

@@ -77,9 +77,8 @@ def refine_beta(dataset_obj, result_folder, model_params,
     model_params['batch_size'] = batch_size
     args['batch_size'] = batch_size
 
-    body_model = cf.get_model(use_cuda, model_params, input_gender)
-    # batched_body_model = torch.vmap(body_model)
     device = torch.device('cuda') if use_cuda else torch.device('cpu')
+    body_model = cf.get_model(device, model_params, input_gender)
 
     # assert batch_size == 1, 'PyTorch L-BFGS only supports batch_size == 1'
     # if person_id >= max_persons and max_persons > 0:
@@ -115,7 +114,7 @@ def refine_beta(dataset_obj, result_folder, model_params,
             shape_weights, hand_joints_weights, face_joints_weights,
             use_hands, use_face)
 
-    camera = cf.get_camera(args.get('focal_length'), use_cuda, dtype, args)
+    camera = cf.get_camera(args.get('focal_length'), device, dtype, args)
 
     img = torch.tensor(sample_data['img'], dtype=dtype)
     H, W, _ = img.shape
@@ -229,6 +228,12 @@ def refine_beta(dataset_obj, result_folder, model_params,
         # print("Betas ", idx, body_model.betas)
 
     dataset_obj.update_beta(torch.mean(min_loss_beta.detach().cpu(), dim=0))
+
+    output_folder="/nitthilan/data/neuralbody/people_snapshot_public/female-1-casual/shape_pose_refinement/"
+    output_file = os.path.join(output_folder, "beta.pkl")
+    with open(output_file, 'wb') as handle:
+        pickle.dump(torch.mean(min_loss_beta.detach().cpu(), dim=0), handle, protocol=pickle.HIGHEST_PROTOCOL)
+
 
     model_params['batch_size'] = 1
     args['batch_size'] = 1

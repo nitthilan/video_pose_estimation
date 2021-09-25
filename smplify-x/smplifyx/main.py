@@ -34,7 +34,9 @@ from utils import JointMapper
 from cmd_parser import parse_config
 from data_parser import create_dataset
 # from fit_single_frame import fit_single_frame
-from pose_refinement_parallel import refine_pose
+# from pose_refinement_parallel import refine_pose
+from pose_refinement_batch_parallel import refine_pose
+
 # from beta_refinement_1 import refine_beta
 from beta_refinement_batch import refine_beta
 
@@ -151,7 +153,7 @@ def main(**args):
 
     body_pose_prior, jaw_prior, expr_prior, left_hand_prior, \
         right_hand_prior, shape_prior, angle_prior = \
-            cf.get_priors(args, dtype)
+            cf.get_priors(args, device, dtype)
 
     # for idx, data in enumerate(train_dataloader):
     #     print("Input data ",  len(data['img']), len(data['fn']), idx,

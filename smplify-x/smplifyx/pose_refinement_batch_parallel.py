@@ -52,12 +52,22 @@ import torch.multiprocessing as mp
 from camera import create_camera
 
 import common_functions as cf
+import pickle
 
 
-if mp.get_start_method(allow_none=True) != 'forkserver':
-    mp.set_start_method('forkserver', force=True)
+if mp.get_start_method(allow_none=True) != 'spawn':
+    mp.set_start_method('spawn', force=True)
 
 
+def fill_gpu(process_queue, num_gpus, num_proc_per_gpu):
+    # initialize the queue with the GPU ids
+    for gpu_id in range(num_gpus):
+        for _ in range(num_proc_per_gpu):
+            process_queue.put(gpu_id)
+            # print(" Put gpu id ", gpu_id)
+
+    # print("Get id ", process_queue.get())
+    return
 def refine_pose(dataset_obj, result_folder, model_params,
         camera, joint_weights, dtype,
         shape_prior, expr_prior, body_pose_prior, left_hand_prior,
@@ -66,21 +76,21 @@ def refine_pose(dataset_obj, result_folder, model_params,
     max_persons = 1
     input_gender = "neutral"
     use_cuda = True
+    batch_size = 1
+    num_gpus = 4
+    num_proc_per_gpu = 3
+    output_folder="/nitthilan/data/neuralbody/people_snapshot_public/female-1-casual/shape_pose_refinement/"
 
+    args["batch_size"] = batch_size
+    model_params['batch_size'] = batch_size
+    joint_weights = joint_weights.repeat(batch_size,1)
 
+    train_dataloader = DataLoader(dataset_obj, batch_size=batch_size, 
+        shuffle=False)
 
-    train_dataloader = DataLoader(dataset_obj, batch_size=1, shuffle=False)
-
-    results_list = []
-    body_pose_list = np.zeros((10,66))
-    betas_list = np.zeros((10,10))
-    camera_trans_list = np.zeros((10,3))
-
-    org_body_pose_list = np.zeros((10,72))
-    org_betas_list = np.zeros((10,10))
-    org_camera_trans_list = np.zeros((10,3))
-
-    pool = mp.Pool(processes=5)
+    pool = mp.Pool(processes=num_proc_per_gpu*num_gpus)
+    process_queue =  mp.Manager().Queue()
+    fill_gpu(process_queue, num_gpus, num_proc_per_gpu)
 
     result_async_list = []
     def accumulate_result(result):
@@ -92,10 +102,9 @@ def refine_pose(dataset_obj, result_folder, model_params,
         return
 
     for idx, data in enumerate(train_dataloader):
-        # print("The data keys ", data.keys())
 
         fn = data['fn'][0]
-        keypoints = data['keypoints'][0]
+        keypoints = data['keypoints']
         print('Processing: {}'.format(data['img_path'][0]))
 
         curr_result_folder = osp.join(result_folder, fn)
@@ -133,7 +142,7 @@ def refine_pose(dataset_obj, result_folder, model_params,
             #                  **args)
 
             result_async = pool.apply_async(fit_single_frame, 
-                            (data, keypoints[[person_id]],),
+                            (data, keypoints[:,person_id,:,:],process_queue),
                              dict(gender=gender,
                              model_params=model_params,
                              joint_weights=joint_weights.clone(),
@@ -151,43 +160,53 @@ def refine_pose(dataset_obj, result_folder, model_params,
 
     for idx, data in enumerate(train_dataloader):
         results = result_async_list[idx].get()
-        results_list.append(results)
         # print("Shape ", results[1]['result'].keys())
         # print("Shape ", results[1]['result']['camera_rotation'].shape,
         #     results[1]['result']['camera_translation'].shape,
         #     results[1]['result']['betas'].shape,
         #     results[1]['result']['body_pose'].shape,
         #     results[1]['result']['left_hand_pose'].shape)
-        betas_list[idx,:] = results[1]['result']['betas']
-        body_pose_list[idx, 3:66] = results[1]['result']['body_pose']
-        body_pose_list[idx, :3] = results[1]['result']['global_orient']
-        camera_trans_list[idx, :] = results[1]['result']['camera_translation']
+        # print("List of result keys ", results)
+        result_stored = {
+            "idx":idx,
+            "camera_translation":results[1]['result']['camera_translation'],
+            "body_pose":results[1]['result']['body_pose'],
+            "global_orient":results[1]['result']['global_orient'],
+            "left_hand_pose":results[1]['result']['left_hand_pose'],
+            "betas":results[1]['result']['betas'],
+            "jaw_pose":results[1]['result']['jaw_pose'],
+            "leye_pose":results[1]['result']['leye_pose'],
+            "reye_pose":results[1]['result']['reye_pose'],
+            "expression":results[1]['result']['expression'],
+            "right_hand_pose":results[1]['result']['right_hand_pose']
+        }
+        output_file = os.path.join(output_folder, str(idx)+".pkl")
+        with open(output_file, 'wb') as handle:
+            pickle.dump(result_stored, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-        print("List of result keys ", results[1]['result'])
+        dataset_obj.update_new_idx(result_stored)
 
-        org_betas_list[idx, :] = data['betas']
-        org_camera_trans_list[idx, :] = data['cam_trans']
-        org_body_pose_list[idx, :] = data['body_pose']
+    args["batch_size"] = 1
+    model_params['batch_size'] = 1
 
-        dataset_obj.update_new_idx(idx, camera_trans_list[idx], 
-            body_pose_list[idx], 
-            results[1]['result']['left_hand_pose'],
-            results[1]['result']['right_hand_pose'])
 
-    print("Mean betas ", np.mean(betas_list, axis=0),
-        np.std(betas_list, axis=0))
-
-    print("Org Mean betas ", np.mean(org_betas_list, axis=0),
-        np.std(org_betas_list, axis=0))
-    print("Cam Trans ", org_camera_trans_list, camera_trans_list)
     return
 
-
-def fit_single_frame(data,
+def fit_single_frame(data, keypoints, process_queue, **kwargs):
+    # print("Entering the process ", dir(process_queue))
+    gpu_id = process_queue.get()
+    # print("The current gpu id ", gpu_id)
+    try:
+        results = fit_single_frame_1(data, keypoints, gpu_id, **kwargs)
+    finally:
+        process_queue.put(gpu_id)
+    return results
+def fit_single_frame_1(data,
                      keypoints,
-                     gender,
+                     gpu_id,                     
                      model_params,
                      joint_weights,
+                     gender=None,                     
                      result_fn='out.pkl',
                      loss_type='smplify',
                      use_cuda=True,
@@ -202,53 +221,39 @@ def fit_single_frame(data,
                      expr_weights=None,
                      hand_joints_weights=None,
                      face_joints_weights=None,
-                     depth_loss_weight=1e2,
-                     interpenetration=True,
-                     coll_loss_weights=None,
-                     df_cone_height=0.5,
-                     penalize_outside=True,
-                     max_collisions=8,
-                     point2plane=False,
-                     part_segm_fn='',
-                     focal_length=5000.,
-                     side_view_thsh=25.,
                      rho=100,
-                     vposer_latent_dim=32,
-                     vposer_ckpt='',
                      use_joints_conf=False,
                      interactive=True,
                      visualize=False,
-                     save_meshes=True,
-                     batch_size=1,
                      dtype=torch.float32,
-                     ign_part_pairs=None,
-                     left_shoulder_idx=2,
-                     right_shoulder_idx=5,
                      **kwargs):
-    assert batch_size == 1, 'PyTorch L-BFGS only supports batch_size == 1'
-    device = torch.device('cuda') if use_cuda else torch.device('cpu')
+    # assert batch_size == 1, 'PyTorch L-BFGS only supports batch_size == 1'
+    device = torch.device('cuda:'+str(gpu_id)) if use_cuda else torch.device('cpu')
+    joint_weights = joint_weights.to(device=device)
+    batch_size = kwargs.get('batch_size')
 
-    camera = cf.get_camera(kwargs.get('focal_length'), use_cuda, dtype, kwargs)
+    camera = cf.get_camera(kwargs.get('focal_length'), device, dtype, kwargs)
 
-    body_model = cf.get_model(use_cuda, model_params, gender)
+    body_model = cf.get_model(device, model_params, gender)
 
     body_pose_prior, jaw_prior, expr_prior, left_hand_prior, \
         right_hand_prior, shape_prior, angle_prior = \
-            cf.get_priors(kwargs, dtype)
+            cf.get_priors(kwargs, device, dtype)
 
     opt_weights = cf.get_weights(data_weights, body_pose_prior_weights, 
                 hand_pose_prior_weights, shape_weights, jaw_pose_prior_weights, 
                 expr_weights, face_joints_weights, hand_joints_weights, 
                 use_hands, use_face, device, dtype)
 
-    betas = torch.unsqueeze(data['mean_beta'][0], 0).float().to(device=device)
-    body_pose = torch.unsqueeze(data['body_pose'][0], 0).float().to(device=device)
-    # print("The input pose info ", body_pose.shape)
+    # print("The input pose info ", data['mean_beta'].shape, 
+    #     data['body_pose'].shape, body_model.betas.shape)
+    betas = data['mean_beta'].float().to(device=device)
+    body_pose = data['body_pose'].float().to(device=device)
 
-    keypoint_data = keypoints
+    keypoint_data = keypoints.float().to(device=device)
     gt_joints = keypoint_data[:, :, :2]
     if use_joints_conf:
-        joints_conf = keypoint_data[:, :, 2].reshape(1, -1)
+        joints_conf = keypoint_data[:, :, 2].reshape(batch_size, -1)
 
     # Transfer the data to the correct device
     gt_joints = gt_joints.to(device=device, dtype=dtype)
@@ -273,7 +278,7 @@ def fit_single_frame(data,
                                **kwargs)
     loss = loss.to(device=device)
 
-    monitor = pose_fitting.FittingMonitor(batch_size=batch_size, visualize=visualize, **kwargs)
+    monitor = pose_fitting.FittingMonitor(visualize=visualize, **kwargs)
 
     # if(model_type == "smpl"):
     #     wrist_pose = torch.zeros([body_pose.shape[0], 6],
@@ -286,11 +291,11 @@ def fit_single_frame(data,
     est_params['betas'] = betas
     est_params['body_pose'] = body_pose[:, 3:66]
     est_params['global_orient'] = body_pose[:, :3]
-    est_params['left_hand_pose'] = data['left_hand_pose'][0]
-    est_params['right_hand_pose'] = data['right_hand_pose'][0]
+    est_params['left_hand_pose'] = data['left_hand_pose'].float().to(device=device)
+    est_params['right_hand_pose'] = data['right_hand_pose'].float().to(device=device)
     body_model.reset_params(**est_params)
 
-    img = data['img'][0]
+    img = data['img'][0].float().to(device=device)
 
     H, W, _ = img.shape
 
@@ -299,8 +304,8 @@ def fit_single_frame(data,
     # Update the value of the translation of the camera as well as
     # the image center.
     with torch.no_grad():
-        camera.translation[:] = data['cam_trans'][0].view_as(camera.translation) #torch.tensor(data['cam_trans'], dtype=dtype) #init_t.view_as(camera.translation)
-        camera.center[:] = torch.tensor([W, H], dtype=dtype) * 0.5
+        camera.translation[:] = data['cam_trans'].view_as(camera.translation).float().to(device=device) #torch.tensor(data['cam_trans'], dtype=dtype) #init_t.view_as(camera.translation)
+        camera.center[:] = torch.tensor([W, H], dtype=dtype).float().to(device=device) * 0.5
     # print("Camera params ", camera.focal_length_x, camera.focal_length_y)
     # Re-enable gradient calculation for the camera translation
     camera.translation.requires_grad = True
@@ -373,7 +378,7 @@ def fit_single_frame(data,
             elapsed = time.time() - stage_start
             if interactive:
                 tqdm.write('Stage {:03d} done after {:.4f} seconds. Loss {}'.format(
-                    opt_idx, elapsed, final_loss_val))
+                    opt_idx, elapsed, final_loss_val/batch_size))
 
 
         # Get the result of the fitting process
@@ -384,7 +389,8 @@ def fit_single_frame(data,
         result.update({key: val.detach().cpu().numpy()
                        for key, val in body_model.named_parameters()})
 
-        results.append({'loss': final_loss_val,
+        results.append({'loss': final_loss_val/batch_size,
                         'result': result})
+        # print("Process ", results)
 
     return results

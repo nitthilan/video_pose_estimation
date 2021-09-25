@@ -34,7 +34,7 @@ from camera import create_camera
 from prior import create_prior
 
 
-def get_camera(focal_length, use_cuda, dtype,
+def get_camera(focal_length, device, dtype,
     kwargs):
     camera = create_camera(focal_length_x=focal_length,
                            focal_length_y=focal_length,
@@ -46,26 +46,20 @@ def get_camera(focal_length, use_cuda, dtype,
 
     if hasattr(camera, 'rotation'):
         camera.rotation.requires_grad = False
-
-    if use_cuda and torch.cuda.is_available():
-        device = torch.device('cuda')
-        camera = camera.to(device=device)
+    camera = camera.to(device=device)
 
     return camera
 
 
-def get_model(use_cuda, model_params, input_gender):
+def get_model(device, model_params, input_gender):
     male_model = smplx.create(gender='male', **model_params)
     # SMPL-H has no gender-neutral model
     neutral_model = smplx.create(gender='neutral', **model_params)
     female_model = smplx.create(gender='female', **model_params)
 
-    if use_cuda and torch.cuda.is_available():
-        device = torch.device('cuda')
-
-        female_model = female_model.to(device=device)
-        male_model = male_model.to(device=device)
-        neutral_model = neutral_model.to(device=device)
+    female_model = female_model.to(device=device)
+    male_model = male_model.to(device=device)
+    neutral_model = neutral_model.to(device=device)
 
     gender = input_gender
 
@@ -175,10 +169,9 @@ def get_weights(data_weights, body_pose_prior_weights,
 
 
 
-def get_priors(args, dtype):
+def get_priors(args, device, dtype):
     use_hands = args.get('use_hands', True)
     use_face = args.get('use_face', True)
-    use_cuda =  args.get('use_cuda', True)
 
     body_pose_prior = create_prior(
         prior_type=args.get('body_prior_type'),
@@ -219,21 +212,15 @@ def get_priors(args, dtype):
 
     angle_prior = create_prior(prior_type='angle', dtype=dtype)
 
-    if use_cuda and torch.cuda.is_available():
-        device = torch.device('cuda')
-
-        body_pose_prior = body_pose_prior.to(device=device)
-        angle_prior = angle_prior.to(device=device)
-        shape_prior = shape_prior.to(device=device)
-        if use_face:
-            expr_prior = expr_prior.to(device=device)
-            jaw_prior = jaw_prior.to(device=device)
-        if use_hands:
-            left_hand_prior = left_hand_prior.to(device=device)
-            right_hand_prior = right_hand_prior.to(device=device)
-    else:
-        device = torch.device('cpu')
-
+    body_pose_prior = body_pose_prior.to(device=device)
+    angle_prior = angle_prior.to(device=device)
+    shape_prior = shape_prior.to(device=device)
+    if use_face:
+        expr_prior = expr_prior.to(device=device)
+        jaw_prior = jaw_prior.to(device=device)
+    if use_hands:
+        left_hand_prior = left_hand_prior.to(device=device)
+        right_hand_prior = right_hand_prior.to(device=device)
 
     return body_pose_prior, jaw_prior, expr_prior, left_hand_prior, \
         right_hand_prior, shape_prior, angle_prior
