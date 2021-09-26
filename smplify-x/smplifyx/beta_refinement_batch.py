@@ -133,7 +133,7 @@ def refine_beta(dataset_obj, result_folder, model_params,
 
     train_dataloader = DataLoader(dataset_obj, batch_size=batch_size, shuffle=False)
 
-    torch.autograd.set_detect_anomaly(True)
+    # torch.autograd.set_detect_anomaly(True)
     person_id = 0
     total_loss = 0.0
     min_loss = 99999999.0

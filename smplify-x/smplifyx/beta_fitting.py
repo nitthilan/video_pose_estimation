@@ -142,7 +142,7 @@ class FittingMonitor(object):
         faces_tensor = body_model.faces_tensor.view(-1)
         train_dataloader = DataLoader(dataset_obj, batch_size=1, shuffle=False)
         def fitting_func(backward=True):
-            torch.autograd.set_detect_anomaly(True)
+            # torch.autograd.set_detect_anomaly(True)
             # print("Append wrist ", optimizer, body_model)
             device = joint_weights.device
 

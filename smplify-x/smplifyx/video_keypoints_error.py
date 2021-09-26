@@ -90,7 +90,6 @@ def video_keypoints_error(dataset_obj, result_folder, model_params,
     person_id = 0
     max_persons = 1
     rho=100
-    maxiters = 30
     loss_type = 'smplify'
     use_joints_conf = True
     body_model = get_model(use_cuda, model_params, input_gender)
@@ -105,14 +104,6 @@ def video_keypoints_error(dataset_obj, result_folder, model_params,
     est_params = {}
     est_params['betas'] = betas
     body_model.reset_params(**est_params)
-
-    final_params = []
-    for k, v in body_model.named_parameters():
-        if k == 'betas':
-            final_params.append(v)
-            
-    body_optimizer, body_create_graph = optim_factory.create_optimizer(
-        final_params, optim_type='lbfgsls')
 
     # The indices of the joints used for the initialization of the camera
     loss = beta_fitting.create_loss(loss_type=loss_type, rho=rho,
@@ -147,7 +138,7 @@ def video_keypoints_error(dataset_obj, result_folder, model_params,
 
     train_dataloader = DataLoader(dataset_obj, batch_size=1, shuffle=False)
 
-    torch.autograd.set_detect_anomaly(True)
+    # torch.autograd.set_detect_anomaly(True)
     person_id = 0
     total_loss = 0.0
 
@@ -167,6 +158,7 @@ def video_keypoints_error(dataset_obj, result_folder, model_params,
         # the image center.
         with torch.no_grad():
             camera.translation[:] = data['cam_trans'].view_as(camera.translation) #torch.tensor(data['cam_trans'], dtype=dtype) #init_t.view_as(camera.translation)
+
         # print('Processing: {}'.format(data['img_path']))
         keypoint_data = data['keypoints'][0][[person_id]]
         gt_joints = keypoint_data[:, :, :2]
@@ -184,7 +176,10 @@ def video_keypoints_error(dataset_obj, result_folder, model_params,
                           joints_conf=joints_conf,
                           joint_weights=joint_weights,
                           **args)
-        model_loss.backward(create_graph=body_create_graph)
+        # model_loss.backward(create_graph=body_create_graph)
+        if(model_loss != model_loss):
+            print("Error in loss ", idx, est_params, camera.translation, model_loss)
+            exit()
 
         total_loss += model_loss
 

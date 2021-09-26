@@ -241,8 +241,8 @@ class OpenPose(Dataset):
         self.img_folder = osp.join(data_folder, img_folder)
         self.keyp_folder = osp.join(data_folder, keyp_folder)
 
-        self.total_files = 10#get_total_folders(self.img_folder)
-        self.idx_scale = 20
+        self.total_files = get_total_folders(self.img_folder)
+        self.idx_scale = 1
 
         # self.img_paths = [osp.join(self.img_folder, img_fn)
         #                   for img_fn in os.listdir(self.img_folder)

@@ -78,7 +78,7 @@ def refine_pose(dataset_obj, result_folder, model_params,
     use_cuda = True
     batch_size = 1
     num_gpus = 4
-    num_proc_per_gpu = 3
+    num_proc_per_gpu = 5
     output_folder="/nitthilan/data/neuralbody/people_snapshot_public/female-1-casual/shape_pose_refinement/"
 
     args["batch_size"] = batch_size
@@ -180,6 +180,22 @@ def refine_pose(dataset_obj, result_folder, model_params,
             "expression":results[1]['result']['expression'],
             "right_hand_pose":results[1]['result']['right_hand_pose']
         }
+        if(result_stored['body_pose'][0,0] != result_stored['body_pose'][0,0]):
+            print("Error in calculation ", idx, result_stored)
+            # exit()
+            result_stored = {
+                "idx":idx,
+                "camera_translation":data['cam_trans'],
+                "body_pose":data['body_pose'][:,3:66],
+                "global_orient":data['body_pose'][:,:3],
+                "left_hand_pose":data['left_hand_pose'],
+                "betas":data['mean_beta'],
+                "right_hand_pose":data['right_hand_pose'],              
+                "jaw_pose":np.zeros((batch_size, 3)),
+                "leye_pose":np.zeros((batch_size, 3)),
+                "reye_pose":np.zeros((batch_size, 3)),
+                "expression":np.zeros((batch_size, 10)),
+            }
         output_file = os.path.join(output_folder, str(idx)+".pkl")
         with open(output_file, 'wb') as handle:
             pickle.dump(result_stored, handle, protocol=pickle.HIGHEST_PROTOCOL)
