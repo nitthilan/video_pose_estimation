@@ -1,0 +1,22 @@
+
+Preprocessed data: /nitthilan/data/VIBE/3DPW/processed
+
+To fix the pre-trained model load issue for running eval make the dimension 2048: https://github.com/mkocabas/VIBE/issues/67
+
+For training this has to be reset back to 1024
+
+
+https://github.com/nkolot/SPIN/blob/master/data/README.md - J_regressor_h36m.npy - 
+
+./results/vibe_tests/06-10-2021_00-18-23_vibe/train_log.txt - Baseline
+
+
+
+Rendering offline:
+https://pyrender.readthedocs.io/en/latest/examples/offscreen.html
+PYOPENGL_PLATFORM=osmesa python eval.py --cfg ./configs/config.yaml
+
+
+alias run_rsync='rsync -azP -e "ssh -i ~/.ssh/id_ed25519" --progress --stats --exclude ".*/" --exclude ".*" --exclude "tmp/" /Users/kannappanjayakodinitthilan/Documents/old_laptop/virtual_studio/vdo_mocap njayakodi_dg@dg20a.eecs.wsu.edu:/local/data/nitthilan/source_code/'
+
+run_rsync; fswatch -o /Users/kannappanjayakodinitthilan/Documents/old_laptop/virtual_studio/vdo_mocap  | while read f; do run_rsync; done
